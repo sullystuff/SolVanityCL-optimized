@@ -143,14 +143,15 @@ def search_pubkey(
                 if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
                     pending_results.append(list(res))
                     found_count += 1
-                    logging.info(f"Found {found_count}/{count} matches (pending save: {len(pending_results)})")
+                    # Log progress every 100 matches or at completion
+                    if found_count % 100 == 0 or found_count == count:
+                        logging.info(f"Progress: {found_count}/{count} matches")
 
                 # flush if enough time passed, or if we've reached the total requested matches
                 if (now - last_flush) >= FLUSH_INTERVAL or found_count >= count:
                     if pending_results:
                         saved = save_result(pending_results, output_dir)
                         saved_total += saved
-                        logging.info(f"Flushed {saved} results to disk (total saved: {saved_total})")
                         pending_results.clear()
                     last_flush = now
 
@@ -174,13 +175,11 @@ def search_pubkey(
                 now = time.time()
                 if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
                     pending_results.append(list(res))
-                    logging.info(f"Draining: collected extra pending result (pending save: {len(pending_results)})")
 
                 # Flush periodically during drain
                 if (now - last_flush) >= FLUSH_INTERVAL and pending_results:
                     saved = save_result(pending_results, output_dir)
                     saved_total += saved
-                    logging.info(f"Draining flush: saved {saved} results (total saved: {saved_total})")
                     pending_results.clear()
                     last_flush = now
 
@@ -195,7 +194,6 @@ def search_pubkey(
                             break
                         if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
                             pending_results.append(list(res))
-                            logging.info(f"Draining final: collected extra pending result (pending save: {len(pending_results)})")
                     break
 
             # Final flush of any pending results
