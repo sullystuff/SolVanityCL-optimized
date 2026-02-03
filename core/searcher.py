@@ -132,3 +132,15 @@ def multi_gpu_init(
         logging.exception(e)
     # worker returns (pool will collect this), but main communication happens via result_queue
     return
+
+def save_result(outputs: List, output_dir: str) -> int:
+    from core.utils.crypto import save_keypair
+
+    result_count = 0
+    for output in outputs:
+        if not output[0]:
+            continue
+        result_count += 1
+        pv_bytes = bytes(output[1:])
+        save_keypair(pv_bytes, output_dir)
+    return result_count
