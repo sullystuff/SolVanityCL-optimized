@@ -1,8 +1,10 @@
 # Modified to start workers once and consume results from a manager.Queue
+# Writes results as soon as they arrive but at most once per 5 seconds (batched).
 
 import logging
 import multiprocessing
 import sys
+import time
 from multiprocessing.pool import Pool
 from typing import List, Optional, Tuple
 
@@ -95,8 +97,14 @@ def search_pubkey(
     )
     logging.info(f"Using {gpu_counts} OpenCL device(s)")
 
-    result_count = 0
-    collected_results = []
+    # settings for flush throttling
+    FLUSH_INTERVAL = 5.0  # seconds
+
+    found_count = 0       # number of matches found (from workers)
+    saved_total = 0       # number of matches actually saved to disk
+    pending_results: List = []
+    last_flush = time.time()
+
     with multiprocessing.Manager() as manager:
         with Pool(processes=gpu_counts) as pool:
             kernel_source = load_kernel_source(
@@ -124,13 +132,31 @@ def search_pubkey(
                     )
                 )
 
-            # consume results as they come in
-            while result_count < count:
+            # consume results as they come in; flush to disk at most once per FLUSH_INTERVAL
+            while found_count < count:
                 res = result_queue.get()  # blocks until a worker puts a result
+                now = time.time()
                 if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
-                    collected_results.append(list(res))
-                    result_count += 1
-                    logging.info(f"Collected {result_count}/{count} results")
+                    pending_results.append(list(res))
+                    found_count += 1
+                    logging.info(f"Found {found_count}/{count} matches (pending save: {len(pending_results)})")
+
+                # flush if enough time passed, or if we've reached the total requested matches
+                if (now - last_flush) >= FLUSH_INTERVAL or found_count >= count:
+                    if pending_results:
+                        saved = save_result(pending_results, output_dir)
+                        saved_total += saved
+                        logging.info(f"Flushed {saved} results to disk (total saved: {saved_total})")
+                        pending_results.clear()
+                    last_flush = now
+
+            # final safety flush in case anything remains (should be empty normally)
+            if pending_results:
+                saved = save_result(pending_results, output_dir)
+                saved_total += saved
+                logging.info(f"Final flush saved {saved} results (total saved: {saved_total})")
+                pending_results.clear()
+
             # signal workers to stop
             with lock:
                 stop_flag.value = 1
@@ -142,8 +168,7 @@ def search_pubkey(
                     # ignore timeouts since workers may exit asynchronously; pool.__exit__ will terminate if needed
                     pass
 
-            # finally save results
-            result_count = save_result(collected_results, output_dir)
+    logging.info(f"Search finished. Total matches found: {found_count}, total saved: {saved_total}")
 
 
 @cli.command(context_settings={"show_default": True})
