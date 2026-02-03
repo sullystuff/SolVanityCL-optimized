@@ -1,3 +1,4 @@
+# Modified to remove NVIDIA sleep and to push results to a result_queue instead of returning immediately
 import logging
 import time
 from typing import List, Optional, Tuple
@@ -67,7 +68,7 @@ class Searcher:
         cl.enqueue_copy(self.command_queue, self.memobj_key32, self.setting.key32)
         global_work_size = self.setting.global_work_size // self.gpu_chunks
         local_size = self.setting.local_work_size
-        global_size = ((global_work_size + local_size - 1) // local_size) * local_size # align global size and local size
+        global_size = ((global_work_size + local_size - 1) // local_size) * local_size  # align global size and local size
         cl.enqueue_nd_range_kernel(
             self.command_queue,
             self.kernel,
@@ -76,8 +77,7 @@ class Searcher:
         )
         self.command_queue.flush()
         self.setting.increase_key32()
-        if self.prev_time is not None and self.is_nvidia:
-            time.sleep(self.prev_time * 0.98)
+        # Removed the NVIDIA throttle sleep to avoid artificial throttling on quick matches
         cl.enqueue_copy(self.command_queue, self.output, self.memobj_output).wait()
         self.prev_time = time.time() - start_time
         if log_stats:
@@ -93,8 +93,13 @@ def multi_gpu_init(
     gpu_counts: int,
     stop_flag,
     lock,
+    result_queue,
     chosen_devices: Optional[Tuple[int, List[int]]] = None,
-) -> List:
+) -> None:
+    """
+    Long-running worker for a single GPU. Pushes matches into result_queue
+    and exits when stop_flag.value is set.
+    """
     try:
         searcher = Searcher(
             kernel_source=setting.kernel_source,
@@ -107,31 +112,23 @@ def multi_gpu_init(
         while True:
             result = searcher.find(i == 0)
             if result[0]:
-                with lock:
-                    if not stop_flag.value:
-                        stop_flag.value = 1
-                return list(result)
+                # push result to shared queue
+                try:
+                    result_queue.put(list(result))
+                except Exception:
+                    logging.exception("Failed to put result into queue")
             if time.time() - st > max(gpu_counts, 1):
                 i = 0
                 st = time.time()
                 with lock:
                     if stop_flag.value:
-                        return list(result)
+                        break
             else:
                 i += 1
+            # check stop flag between iterations
+            if stop_flag.value:
+                break
     except Exception as e:
         logging.exception(e)
-    return [0]
-
-
-def save_result(outputs: List, output_dir: str) -> int:
-    from core.utils.crypto import save_keypair
-
-    result_count = 0
-    for output in outputs:
-        if not output[0]:
-            continue
-        result_count += 1
-        pv_bytes = bytes(output[1:])
-        save_keypair(pv_bytes, output_dir)
-    return result_count
+    # worker returns (pool will collect this), but main communication happens via result_queue
+    return

@@ -1,3 +1,5 @@
+# Modified to start workers once and consume results from a manager.Queue
+
 import logging
 import multiprocessing
 import sys
@@ -94,29 +96,54 @@ def search_pubkey(
     logging.info(f"Using {gpu_counts} OpenCL device(s)")
 
     result_count = 0
+    collected_results = []
     with multiprocessing.Manager() as manager:
         with Pool(processes=gpu_counts) as pool:
             kernel_source = load_kernel_source(
                 starts_with, ends_with, is_case_sensitive
             )
             lock = manager.Lock()
-            while result_count < count:
-                stop_flag = manager.Value("i", 0)
-                results = pool.starmap(
-                    multi_gpu_init,
-                    [
+            result_queue = manager.Queue()
+            stop_flag = manager.Value("i", 0)
+
+            # start long-running workers once per GPU
+            async_results = []
+            for x in range(gpu_counts):
+                async_results.append(
+                    pool.apply_async(
+                        multi_gpu_init,
                         (
                             x,
                             HostSetting(kernel_source, iteration_bits),
                             gpu_counts,
                             stop_flag,
                             lock,
+                            result_queue,
                             chosen_devices,
-                        )
-                        for x in range(gpu_counts)
-                    ],
+                        ),
+                    )
                 )
-                result_count += save_result(results, output_dir)
+
+            # consume results as they come in
+            while result_count < count:
+                res = result_queue.get()  # blocks until a worker puts a result
+                if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
+                    collected_results.append(list(res))
+                    result_count += 1
+                    logging.info(f"Collected {result_count}/{count} results")
+            # signal workers to stop
+            with lock:
+                stop_flag.value = 1
+            # wait for all workers to exit
+            for a in async_results:
+                try:
+                    a.get(timeout=10)
+                except Exception:
+                    # ignore timeouts since workers may exit asynchronously; pool.__exit__ will terminate if needed
+                    pass
+
+            # finally save results
+            result_count = save_result(collected_results, output_dir)
 
 
 @cli.command(context_settings={"show_default": True})
