@@ -1,10 +1,11 @@
 # Modified to start workers once and consume results from a manager.Queue
-# Writes results as soon as they arrive but at most once per 5 seconds (batched).
+# Wait for pending flushes to complete before exiting.
 
 import logging
 import multiprocessing
 import sys
 import time
+import queue as _queue
 from multiprocessing.pool import Pool
 from typing import List, Optional, Tuple
 
@@ -134,7 +135,10 @@ def search_pubkey(
 
             # consume results as they come in; flush to disk at most once per FLUSH_INTERVAL
             while found_count < count:
-                res = result_queue.get()  # blocks until a worker puts a result
+                try:
+                    res = result_queue.get(timeout=1.0)
+                except _queue.Empty:
+                    res = None
                 now = time.time()
                 if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
                     pending_results.append(list(res))
@@ -150,38 +154,63 @@ def search_pubkey(
                         pending_results.clear()
                     last_flush = now
 
-            # final safety flush in case anything remains (should be empty normally)
+            # At this point we've collected the requested number of matches.
+            # Signal workers to stop and then drain the queue and flush any remaining results before exiting.
+
+            # signal workers to stop
+            with lock:
+                stop_flag.value = 1
+
+            # Drain remaining results while waiting for workers to exit.
+            # We loop until all worker async tasks are done and the queue is empty.
+            logging.info("Signaled workers to stop; draining remaining results before exit...")
+            while True:
+                # Try to pull items from queue; timeout to allow checking worker status
+                try:
+                    res = result_queue.get(timeout=0.5)
+                except _queue.Empty:
+                    res = None
+
+                now = time.time()
+                if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
+                    pending_results.append(list(res))
+                    logging.info(f"Draining: collected extra pending result (pending save: {len(pending_results)})")
+
+                # Flush periodically during drain
+                if (now - last_flush) >= FLUSH_INTERVAL and pending_results:
+                    saved = save_result(pending_results, output_dir)
+                    saved_total += saved
+                    logging.info(f"Draining flush: saved {saved} results (total saved: {saved_total})")
+                    pending_results.clear()
+                    last_flush = now
+
+                # If all workers are finished, also drain any remaining queue items without blocking and break
+                all_finished = all(a.ready() for a in async_results)
+                if all_finished:
+                    # drain any remaining items quickly (non-blocking)
+                    while True:
+                        try:
+                            res = result_queue.get_nowait()
+                        except _queue.Empty:
+                            break
+                        if isinstance(res, (list, tuple, bytearray, bytes)) and len(res) > 0 and res[0]:
+                            pending_results.append(list(res))
+                            logging.info(f"Draining final: collected extra pending result (pending save: {len(pending_results)})")
+                    break
+
+            # Final flush of any pending results
             if pending_results:
                 saved = save_result(pending_results, output_dir)
                 saved_total += saved
                 logging.info(f"Final flush saved {saved} results (total saved: {saved_total})")
                 pending_results.clear()
 
-            # signal workers to stop
-            with lock:
-                stop_flag.value = 1
-            # wait for all workers to exit
+            # Now wait for worker futures to finish (get their results / exceptions)
             for a in async_results:
                 try:
                     a.get(timeout=10)
                 except Exception:
-                    # ignore timeouts since workers may exit asynchronously; pool.__exit__ will terminate if needed
+                    # ignore timeouts / exceptions here; pool termination will handle lingering processes
                     pass
 
     logging.info(f"Search finished. Total matches found: {found_count}, total saved: {saved_total}")
-
-
-@cli.command(context_settings={"show_default": True})
-def show_device():
-    """Show available OpenCL devices."""
-    platforms = cl.get_platforms()
-    for p_index, platform in enumerate(platforms):
-        click.echo(f"Platform {p_index}: {platform.name}")
-        devices = platform.get_devices(device_type=cl.device_type.GPU)
-        for d_index, device in enumerate(devices):
-            click.echo(f"  - Device {d_index}: {device.name}")
-
-
-if __name__ == "__main__":
-    multiprocessing.set_start_method("spawn")
-    cli()
