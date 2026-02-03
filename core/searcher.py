@@ -84,6 +84,15 @@ class Searcher:
             logging.info(
                 f"GPU {self.display_index} Speed: {global_work_size / ((time.time() - start_time) * 1e6):.2f} MH/s"
             )
+        
+        # If a match was found, clear the GPU output buffer so we don't report it again
+        if self.output[0]:
+            result = bytearray(self.output)  # Make a copy to return
+            self.output[:] = bytearray(33)   # Clear local buffer
+            # Clear GPU buffer too
+            cl.enqueue_copy(self.command_queue, self.memobj_output, self.output).wait()
+            return result
+        
         return self.output
 
 
@@ -134,8 +143,13 @@ def multi_gpu_init(
     return
 
 def save_result(outputs: List, output_dir: str) -> int:
-    from core.utils.crypto import save_keypair
-
+    """
+    Save results to disk. Returns count of results processed (may include duplicates).
+    Actual unique saves are tracked by save_keypair's deduplication.
+    """
+    from core.utils.crypto import save_keypair, _seen_pubkeys
+    
+    before_count = len(_seen_pubkeys)
     result_count = 0
     for output in outputs:
         if not output[0]:
@@ -143,4 +157,7 @@ def save_result(outputs: List, output_dir: str) -> int:
         result_count += 1
         pv_bytes = bytes(output[1:])
         save_keypair(pv_bytes, output_dir)
-    return result_count
+    
+    # Return actual NEW unique keys saved, not total processed
+    new_unique = len(_seen_pubkeys) - before_count
+    return new_unique
