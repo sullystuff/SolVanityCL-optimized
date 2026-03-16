@@ -32,7 +32,7 @@ class TestKernelIntegration(unittest.TestCase):
 
         seed = bytes(range(1, 33))
         pubkey = b58encode(bytes(SigningKey(seed).verify_key)).decode()
-        kernel_source = load_kernel_source((pubkey[:2],), pubkey[-2:], True)
+        kernel_source = load_kernel_source((pubkey[:2],), (pubkey[-2:],), True)
 
         setting = HostSetting(kernel_source, iteration_bits=0)
         setting.local_work_size = 1

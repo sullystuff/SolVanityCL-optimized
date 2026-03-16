@@ -46,30 +46,42 @@ $ python3 main.py search-pubkey --help
 
 Usage: main.py search-pubkey [OPTIONS]
 
-  Search Solana vanity pubkey
+  Search for Solana vanity pubkeys.
 
 Options:
-  --starts-with TEXT              Public key starts with the indicated prefix. Provide multiple arguments to search for multiple prefixes.
-  --ends-with TEXT                Public key ends with the indicated suffix.
+  --starts-with TEXT              Prefix to match. Repeatable for multiple
+                                  prefixes. Append :DIR to set a per-pattern
+                                  output directory (e.g. --starts-with
+                                  bonk:./bonk-keys).
+  --ends-with TEXT                Suffix to match. Repeatable for multiple
+                                  suffixes. Append :DIR to set a per-pattern
+                                  output directory (e.g. --ends-with
+                                  pump:./pump-keys).
   --count INTEGER                 Count of pubkeys to generate.  [default: 1]
-  --output-dir DIRECTORY          Output directory.  [default: ./]
+  --output-dir DIRECTORY          Default output directory.  [default: ./]
   --select-device / --no-select-device
                                   Select OpenCL device manually  [default: no-
                                   select-device]
-  --iteration-bits INTEGER        Number of the iteration occupied bits.
-                                  Recommended 24, 26, 28, 30, 32. The larger
-                                  the bits, the longer it takes to complete an
-                                  iteration.  [default: 24]
-  --is-case-sensitive BOOLEAN     Whether the search should be case sensitive
-                                  or not. [default: True]
+  --iteration-bits INTEGER        Iteration bits (e.g., 24, 26, 28, etc.)
+                                  [default: 24]
+  --is-case-sensitive BOOLEAN     Case sensitive search flag.  [default: True]
   --help                          Show this message and exit.
 ```
 
-Example:
+Examples:
 
 ```bash
-$ python3 main.py search-pubkey --starts-with SoL # run
-$ solana-keygen pubkey SoLxxxxxxxxxxx.json # you should install solana cli to verify it
+$ python3 main.py search-pubkey --starts-with SoL
+$ solana-keygen pubkey SoLxxxxxxxxxxx.json # verify with solana cli
+
+# Search for multiple suffixes at the same time
+$ python3 main.py search-pubkey --ends-with bonk --ends-with pump
+
+# Multiple suffixes with separate output directories
+$ python3 main.py search-pubkey --ends-with bonk:./bonk-keys --ends-with pump:./pump-keys
+
+# Combine multiple prefixes and suffixes
+$ python3 main.py search-pubkey --starts-with So --starts-with Bo --ends-with dev --count 3
 ```
 
 

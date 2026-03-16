@@ -18,11 +18,8 @@ def check_character(name: str, character: str) -> None:
 
 
 def load_kernel_source(
-    starts_with_list: Tuple[str], ends_with: str, is_case_sensitive: bool
+    starts_with_list: Tuple[str, ...], ends_with_list: Tuple[str, ...], is_case_sensitive: bool
 ) -> str:
-    """
-    Update OpenCL codes with parameters
-    """
     prefixes = (
         [list(prefix.encode()) for prefix in starts_with_list]
         if starts_with_list
@@ -34,7 +31,16 @@ def load_kernel_source(
     for p in prefixes:
         p.extend([0] * (max_prefix_len - len(p)))
 
-    SUFFIX_BYTES = list(ends_with.encode())
+    suffixes = (
+        [list(suffix.encode()) for suffix in ends_with_list]
+        if ends_with_list
+        else [[]]
+    )
+
+    max_suffix_len = max((len(s) for s in suffixes), default=0)
+
+    for s in suffixes:
+        s.extend([0] * (max_suffix_len - len(s)))
 
     kernel_path = Path(__file__).parent.parent / "opencl" / "kernel.cl"
     if not kernel_path.exists():
@@ -47,16 +53,22 @@ def load_kernel_source(
             source_lines[i] = f"#define N {len(prefixes)}\n"
         elif line.startswith("#define L "):
             source_lines[i] = f"#define L {max_prefix_len}\n"
+        elif line.startswith("#define M "):
+            source_lines[i] = f"#define M {len(suffixes)}\n"
+        elif line.startswith("#define K "):
+            source_lines[i] = f"#define K {max_suffix_len}\n"
         elif line.startswith("constant uchar PREFIXES"):
             prefixes_str = "{"
             for prefix in prefixes:
                 prefixes_str += "{" + ", ".join(map(str, prefix)) + "}, "
             prefixes_str = prefixes_str.rstrip(", ") + "}"
             source_lines[i] = f"constant uchar PREFIXES[N][L] = {prefixes_str};\n"
-        elif line.startswith("constant uchar SUFFIX[]"):
-            source_lines[i] = (
-                f"constant uchar SUFFIX[] = {{{', '.join(map(str, SUFFIX_BYTES))}}};\n"
-            )
+        elif line.startswith("constant uchar SUFFIXES"):
+            suffixes_str = "{"
+            for suffix in suffixes:
+                suffixes_str += "{" + ", ".join(map(str, suffix)) + "}, "
+            suffixes_str = suffixes_str.rstrip(", ") + "}"
+            source_lines[i] = f"constant uchar SUFFIXES[M][K] = {suffixes_str};\n"
         elif line.startswith("constant bool CASE_SENSITIVE"):
             source_lines[i] = (
                 f"constant bool CASE_SENSITIVE = {str(is_case_sensitive).lower()};\n"

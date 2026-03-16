@@ -8,11 +8,13 @@ typedef unsigned long uint64_t;
 typedef long int64_t;
 typedef int32_t fe[10];
 
-// DO NOT EDIT BELOW 5 LINES BY HAND -- CHANGES WILL BE OVERWRITTEN
+// DO NOT EDIT BELOW 7 LINES BY HAND -- CHANGES WILL BE OVERWRITTEN
 #define N 1
 #define L 3
+#define M 1
+#define K 0
 constant uchar PREFIXES[N][L] = {{83, 111, 76}};
-constant uchar SUFFIX[] = {};
+constant uchar SUFFIXES[M][K] = {{}};
 constant bool CASE_SENSITIVE = true;
 // DO NOT EDIT ABOVE THIS LINE -- END OF AUTO-GENERATED CODE
 
@@ -3756,7 +3758,7 @@ __kernel void generate_pubkey(constant uchar *seed, global uchar *out,
   uchar addr_buffer[45] __attribute__((aligned(4)));
   uchar *addr_raw = base58_encode(public_key, &length, addr_buffer);
 
-  unsigned int any_mismatch = 1;
+  unsigned int prefix_matched = 0;
 
   // prefix matching
   #pragma unroll
@@ -3767,19 +3769,33 @@ __kernel void generate_pubkey(constant uchar *seed, global uchar *out,
     }
 
     if (!prefix_mismatch) {
-      any_mismatch = 0;
+      prefix_matched = 1;
       break;
     }
-}
-
-  // suffix matching
-  #pragma unroll
-  for (size_t i = 0; i < sizeof(SUFFIX); i++) {
-    any_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - sizeof(SUFFIX) + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIX[i]]);
   }
 
+  // suffix matching
+  unsigned int suffix_matched = 1;
+  if (K > 0) {
+    suffix_matched = 0;
+    #pragma unroll
+    for (size_t s = 0; s < M; s++) {
+      unsigned int suffix_mismatch = 0;
+      size_t suf_len = 0;
+      for (size_t i = 0; i < K; i++) {
+        if (SUFFIXES[s][i] != 0) suf_len = i + 1;
+      }
+      for (size_t i = 0; i < suf_len; i++) {
+        suffix_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - suf_len + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
+      }
+      if (!suffix_mismatch && suf_len > 0) {
+        suffix_matched = 1;
+        break;
+      }
+    }
+  }
 
-  if (!any_mismatch) {
+  if (prefix_matched && suffix_matched) {
     // assign to out
     if (out[0] == 0) {
       out[0] = length;
